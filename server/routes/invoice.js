@@ -43,7 +43,7 @@ router.post('/from-order', async (req, res) => {
     const gid = `gid://shopify/Order/${order_id}`;
     const query = `{
       order(id: "${gid}") {
-        id name email currency orderNumber createdAt
+        id name email currencyCode orderNumber createdAt
         totalPriceSet { shopMoney { amount } }
         billingAddress { firstName lastName address1 city country }
         lineItems(first: 50) {
@@ -82,7 +82,7 @@ router.post('/from-order', async (req, res) => {
       companyName: company_name,
       companyAddress: company_address,
       taxRate: tax_rate,
-      currency: order.currency,
+      currency: order.currencyCode,
     });
 
     const pdfBuffer = await generateInvoicePDF(args);
