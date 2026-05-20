@@ -109,17 +109,58 @@ app.get('/api/session', (req, res) => {
   res.json({ shop: session.shop, authenticated: true });
 });
 
-// GET /api/orders - proxy Shopify orders
+// GET /api/orders - proxy Shopify orders via GraphQL (REST requires PCD approval)
 app.get('/api/orders', async (req, res) => {
   const session = getSession(req);
   if (!session) return res.status(401).json({ error: 'Not authenticated' });
   try {
+    const query = `{
+      orders(first: 50, sortKey: CREATED_AT, reverse: true) {
+        edges {
+          node {
+            id name email currency createdAt orderNumber
+            totalPriceSet { shopMoney { amount } }
+            billingAddress { firstName lastName address1 city country }
+            lineItems(first: 50) {
+              edges { node { id title quantity variantTitle originalUnitPriceSet { shopMoney { amount } } } }
+            }
+          }
+        }
+      }
+    }`;
     const r = await fetch(
-      `https://${session.shop}/admin/api/2024-01/orders.json?limit=50&status=any`,
-      { headers: { 'X-Shopify-Access-Token': session.access_token } }
+      `https://${session.shop}/admin/api/2024-01/graphql.json`,
+      {
+        method: 'POST',
+        headers: {
+          'X-Shopify-Access-Token': session.access_token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query }),
+      }
     );
-    const data = await r.json();
-    res.json(data);
+    const gql = await r.json();
+    if (gql.errors) return res.status(500).json({ error: gql.errors[0]?.message });
+    const orders = gql.data.orders.edges.map(({ node }) => {
+      const ba = node.billingAddress;
+      return {
+        id: parseInt(node.id.split('/').pop()),
+        order_number: node.orderNumber,
+        email: node.email,
+        currency: node.currency,
+        total_price: node.totalPriceSet.shopMoney.amount,
+        billing_address: ba ? { name: `${ba.firstName || ''} ${ba.lastName || ''}`.trim(), address1: ba.address1, city: ba.city, country: ba.country } : null,
+        created_at: node.createdAt,
+        line_items: node.lineItems.edges.map(({ node: li }) => ({
+          id: parseInt(li.id.split('/').pop()),
+          title: li.title,
+          quantity: li.quantity,
+          price: li.originalUnitPriceSet.shopMoney.amount,
+          variant_title: li.variantTitle,
+        })),
+      };
+    });
+    res.json({ orders });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 

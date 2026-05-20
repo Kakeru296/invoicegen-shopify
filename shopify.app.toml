@@ -1,0 +1,19 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "055c58ca4a3c8c74054fb105f38216b1"
+name = "InvoiceGen"
+application_url = "https://invoicegen-shopify.vercel.app"
+embedded = true
+handle = "invoicegen-2"
+
+[webhooks]
+api_version = "2026-04"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_customers,write_draft_orders,read_draft_orders,read_orders,read_products"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [ "https://invoicegen-shopify.vercel.app/auth/callback" ]
