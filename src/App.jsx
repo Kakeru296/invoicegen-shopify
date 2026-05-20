@@ -1,42 +1,66 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
   AppProvider, Page, Card, Text, Button, Select, TextField,
-  BlockStack, InlineStack, Banner, Spinner, DataTable,
+  BlockStack, InlineStack, Banner, Spinner,
 } from '@shopify/polaris';
 import enTranslations from '@shopify/polaris/locales/en.json';
 import '@shopify/polaris/build/esm/styles.css';
 
-function getShopFromUrl() {
-  const params = new URLSearchParams(window.location.search);
-  return params.get('shop') || '';
+function getParam(key) {
+  return new URLSearchParams(window.location.search).get(key) || '';
+}
+
+function getSessionFromCookie() {
+  const match = document.cookie.split('; ').find(r => r.startsWith('ig_session='));
+  return match ? match.split('=')[1] : null;
 }
 
 export default function App() {
-  const [shop] = useState(getShopFromUrl);
+  const shop = getParam('shop');
   const [orders, setOrders] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState('');
   const [companyName, setCompanyName] = useState('');
   const [companyAddress, setCompanyAddress] = useState('');
   const [taxRate, setTaxRate] = useState('0');
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
+  const [authed, setAuthed] = useState(false);
+
+  const fetchWithSession = useCallback(async (url, opts = {}) => {
+    const session = getSessionFromCookie();
+    return fetch(url, {
+      ...opts,
+      credentials: 'include',
+      headers: {
+        ...(opts.headers || {}),
+        ...(session ? { Authorization: `Bearer ${session}` } : {}),
+      },
+    });
+  }, []);
+
+  const authenticate = useCallback(() => {
+    if (!shop) return;
+    const host = getParam('host');
+    window.location.href = `/auth?shop=${shop}&host=${host}`;
+  }, [shop]);
 
   const loadOrders = useCallback(async () => {
-    if (!shop) return;
-    setLoading(true);
+    if (!shop) { setLoading(false); return; }
     try {
-      const res = await fetch(`/api/invoice/orders?shop=${shop}`);
+      const res = await fetchWithSession(`/api/orders`);
+      if (res.status === 401) { authenticate(); return; }
       if (res.ok) {
         const data = await res.json();
         setOrders(data.orders || []);
+        setAuthed(true);
       }
     } catch (e) {
-      setError('Failed to load orders');
+      setError('Failed to load orders: ' + e.message);
     } finally {
       setLoading(false);
     }
-  }, [shop]);
+  }, [shop, fetchWithSession, authenticate]);
 
   useEffect(() => { loadOrders(); }, [loadOrders]);
 
@@ -45,7 +69,7 @@ export default function App() {
     setGenerating(true);
     setError('');
     try {
-      const res = await fetch('/api/invoice/from-order', {
+      const res = await fetchWithSession('/api/invoice/from-order', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -61,7 +85,8 @@ export default function App() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `invoice-${selectedOrder}.pdf`;
+      const order = orders.find(o => o.id.toString() === selectedOrder);
+      a.download = `invoice-${order?.order_number || Date.now()}.pdf`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {
@@ -71,36 +96,43 @@ export default function App() {
     }
   };
 
+  const orderOptions = [
+    { label: 'Select an order...', value: '' },
+    ...orders.map(o => ({
+      label: `#${o.order_number} — ${o.billing_address?.name || o.email || 'Customer'} (${o.currency} ${o.total_price})`,
+      value: o.id.toString(),
+    })),
+  ];
+
   if (!shop) {
     return (
       <AppProvider i18n={enTranslations}>
         <Page title="InvoiceGen">
-          <Banner tone="warning">
-            <Text>Please open this app from your Shopify admin.</Text>
-          </Banner>
+          <Banner tone="warning"><Text>Please open this app from your Shopify admin.</Text></Banner>
         </Page>
       </AppProvider>
     );
   }
 
-  const orderOptions = [
-    { label: 'Select an order...', value: '' },
-    ...orders.map(o => ({
-      label: `#${o.order_number} — ${o.billing_address?.name || o.email} ($${o.total_price})`,
-      value: o.id.toString(),
-    })),
-  ];
-
   return (
     <AppProvider i18n={enTranslations}>
-      <Page title="InvoiceGen" subtitle="Generate professional PDF invoices from your Shopify orders">
+      <Page
+        title="InvoiceGen"
+        subtitle="Generate professional PDF invoices from your Shopify orders"
+      >
         <BlockStack gap="400">
-          {error && <Banner tone="critical"><Text>{error}</Text></Banner>}
+          {error && (
+            <Banner tone="critical" onDismiss={() => setError('')}>
+              <Text>{error}</Text>
+            </Banner>
+          )}
 
           <Card>
             <BlockStack gap="300">
-              <Text variant="headingMd">1. Select Order</Text>
-              {loading ? <Spinner size="small" /> : (
+              <Text variant="headingMd" as="h2">1. Select Order</Text>
+              {loading ? (
+                <InlineStack gap="200" align="center"><Spinner size="small" /><Text>Loading orders...</Text></InlineStack>
+              ) : (
                 <Select
                   label="Order"
                   options={orderOptions}
@@ -113,9 +145,9 @@ export default function App() {
 
           <Card>
             <BlockStack gap="300">
-              <Text variant="headingMd">2. Your Company Info</Text>
-              <TextField label="Company Name" value={companyName} onChange={setCompanyName} autoComplete="off" />
-              <TextField label="Company Address" value={companyAddress} onChange={setCompanyAddress} multiline={2} autoComplete="off" />
+              <Text variant="headingMd" as="h2">2. Your Company Info</Text>
+              <TextField label="Company Name" value={companyName} onChange={setCompanyName} autoComplete="organization" />
+              <TextField label="Company Address" value={companyAddress} onChange={setCompanyAddress} multiline={2} autoComplete="street-address" />
               <TextField label="Tax Rate (%)" type="number" value={taxRate} onChange={setTaxRate} autoComplete="off" />
             </BlockStack>
           </Card>
@@ -124,11 +156,11 @@ export default function App() {
             <Button
               variant="primary"
               size="large"
-              disabled={!selectedOrder || generating}
+              disabled={!selectedOrder || generating || loading}
               loading={generating}
               onClick={generateInvoice}
             >
-              {generating ? 'Generating...' : '📄 Generate PDF Invoice'}
+              📄 Generate PDF Invoice
             </Button>
           </InlineStack>
         </BlockStack>

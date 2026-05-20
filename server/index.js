@@ -2,28 +2,46 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
+import cookieParser from 'cookie-parser';
 import invoiceRouter from './routes/invoice.js';
 
 const app = express();
 const API_KEY = process.env.SHOPIFY_API_KEY;
 const API_SECRET = process.env.SHOPIFY_API_SECRET;
-const HOST = process.env.HOST || 'https://invoicegen-shopify.vercel.app';
-const SCOPES = process.env.SHOPIFY_SCOPES || 'read_orders,read_customers,read_products';
+const HOST = (process.env.HOST || 'https://invoicegen-shopify.vercel.app').replace(/\/$/, '');
+const SCOPES = process.env.SHOPIFY_SCOPES || 'read_orders,read_customers,read_products,read_draft_orders,write_draft_orders';
+const COOKIE_SECRET = process.env.COOKIE_SECRET || API_SECRET;
 
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
+app.use(cookieParser(COOKIE_SECRET));
 
-// Simple in-memory session store (use Redis/Supabase for production)
-const sessions = new Map();
+// Sign session data into a cookie value
+function signSession(data) {
+  const payload = Buffer.from(JSON.stringify(data)).toString('base64');
+  const sig = crypto.createHmac('sha256', COOKIE_SECRET).update(payload).digest('hex');
+  return `${payload}.${sig}`;
+}
+
+// Verify and parse session cookie
+function parseSession(cookieVal) {
+  if (!cookieVal) return null;
+  const [payload, sig] = cookieVal.split('.');
+  if (!payload || !sig) return null;
+  const expected = crypto.createHmac('sha256', COOKIE_SECRET).update(payload).digest('hex');
+  if (sig !== expected) return null;
+  try { return JSON.parse(Buffer.from(payload, 'base64').toString('utf8')); }
+  catch { return null; }
+}
 
 // OAuth start
 app.get('/auth', (req, res) => {
   const shop = req.query.shop;
-  if (!shop) return res.status(400).send('Missing shop');
+  if (!shop) return res.status(400).send('Missing shop parameter');
   const state = crypto.randomBytes(16).toString('hex');
-  sessions.set(state, { shop, createdAt: Date.now() });
+  res.cookie('oauth_state', state, { httpOnly: true, secure: true, sameSite: 'None', maxAge: 600000 });
   const redirectUri = `${HOST}/auth/callback`;
-  const authUrl = `https://${shop}/admin/oauth/authorize?client_id=${API_KEY}&scope=${SCOPES}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
+  const authUrl = `https://${shop}/admin/oauth/authorize?client_id=${API_KEY}&scope=${encodeURIComponent(SCOPES)}&redirect_uri=${encodeURIComponent(redirectUri)}&state=${state}`;
   res.redirect(authUrl);
 });
 
@@ -34,13 +52,12 @@ app.get('/auth/callback', async (req, res) => {
     if (!shop || !code) return res.status(400).send('Missing parameters');
 
     // HMAC validation
-    const params = Object.fromEntries(
-      Object.entries(req.query)
-        .filter(([k]) => k !== 'hmac')
-        .sort(([a], [b]) => a.localeCompare(b))
-    );
-    const message = Object.entries(params).map(([k, v]) => `${k}=${v}`).join('&');
-    const digest = crypto.createHmac('sha256', API_SECRET).update(message).digest('hex');
+    const params = Object.entries(req.query)
+      .filter(([k]) => k !== 'hmac')
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${k}=${v}`)
+      .join('&');
+    const digest = crypto.createHmac('sha256', API_SECRET).update(params).digest('hex');
     if (digest !== hmac) return res.status(403).send('Invalid HMAC');
 
     // Exchange code for access token
@@ -49,11 +66,18 @@ app.get('/auth/callback', async (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ client_id: API_KEY, client_secret: API_SECRET, code }),
     });
-    const { access_token } = await tokenRes.json();
-    if (!access_token) return res.status(500).send('Token exchange failed');
+    const tokenData = await tokenRes.json();
+    const { access_token } = tokenData;
+    if (!access_token) return res.status(500).send('Token exchange failed: ' + JSON.stringify(tokenData));
 
-    // Store token (in-memory; replace with DB in production)
-    sessions.set(shop, { access_token, shop });
+    // Store session in signed cookie
+    const sessionCookie = signSession({ shop, access_token });
+    res.cookie('ig_session', sessionCookie, {
+      httpOnly: false, // Allow JS to read for passing to API
+      secure: true,
+      sameSite: 'None',
+      maxAge: 86400000,
+    });
 
     const host = req.query.host || Buffer.from(`admin.shopify.com/store/${shop.split('.')[0]}`).toString('base64');
     res.redirect(`/?shop=${shop}&host=${host}`);
@@ -63,12 +87,38 @@ app.get('/auth/callback', async (req, res) => {
   }
 });
 
-// Session token endpoint for frontend
+// Middleware to extract session from cookie or header
+function getSession(req) {
+  // Try cookie first
+  const fromCookie = parseSession(req.cookies?.ig_session);
+  if (fromCookie) return fromCookie;
+  // Try Authorization header (for explicit token passing)
+  const auth = req.headers.authorization;
+  if (auth?.startsWith('Bearer ')) {
+    return parseSession(auth.slice(7));
+  }
+  return null;
+}
+
+// GET /api/session - return session info
 app.get('/api/session', (req, res) => {
-  const { shop } = req.query;
-  const session = sessions.get(shop);
-  if (!session) return res.status(401).json({ error: 'Not authenticated' });
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Not authenticated', redirectTo: '/auth' });
   res.json({ shop: session.shop, authenticated: true });
+});
+
+// GET /api/orders - proxy Shopify orders
+app.get('/api/orders', async (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Not authenticated' });
+  try {
+    const r = await fetch(
+      `https://${session.shop}/admin/api/2024-01/orders.json?limit=50&status=any`,
+      { headers: { 'X-Shopify-Access-Token': session.access_token } }
+    );
+    const data = await r.json();
+    res.json(data);
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/health', (_req, res) => res.json({ ok: true, app: 'invoicegen-shopify' }));
