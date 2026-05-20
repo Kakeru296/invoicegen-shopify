@@ -43,7 +43,7 @@ router.post('/from-order', async (req, res) => {
     const gid = `gid://shopify/Order/${order_id}`;
     const query = `{
       order(id: "${gid}") {
-        id name email currencyCode orderNumber createdAt
+        id name email currencyCode createdAt
         totalPriceSet { shopMoney { amount } }
         billingAddress { firstName lastName address1 city country }
         lineItems(first: 50) {
@@ -74,7 +74,7 @@ router.post('/from-order', async (req, res) => {
     }));
 
     const args = buildPdfArgs({
-      orderNumber: order.orderNumber,
+      orderNumber: parseInt(order.name.replace(/\D/g, '')) || order.name,
       createdAt: order.createdAt,
       email: order.email,
       billingAddress: ba ? { name: `${ba.firstName || ''} ${ba.lastName || ''}`.trim(), address1: ba.address1, city: ba.city, country: ba.country } : null,
