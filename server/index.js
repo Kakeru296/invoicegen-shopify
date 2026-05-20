@@ -26,7 +26,9 @@ function signSession(data) {
 // Verify and parse session cookie
 function parseSession(cookieVal) {
   if (!cookieVal) return null;
-  const [payload, sig] = cookieVal.split('.');
+  // document.cookie URL-encodes values (e.g. = → %3D); cookie-parser already decodes req.cookies
+  const val = cookieVal.includes('%') ? decodeURIComponent(cookieVal) : cookieVal;
+  const [payload, sig] = val.split('.');
   if (!payload || !sig) return null;
   const expected = crypto.createHmac('sha256', COOKIE_SECRET).update(payload).digest('hex');
   if (sig !== expected) return null;
