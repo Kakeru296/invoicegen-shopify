@@ -118,7 +118,7 @@ app.get('/api/orders', async (req, res) => {
       orders(first: 50, sortKey: CREATED_AT, reverse: true) {
         edges {
           node {
-            id name email currencyCode createdAt
+            id name currencyCode createdAt
             totalPriceSet { shopMoney { amount } }
             billingAddress { firstName lastName address1 city country }
             lineItems(first: 50) {
@@ -146,7 +146,7 @@ app.get('/api/orders', async (req, res) => {
       return {
         id: parseInt(node.id.split('/').pop()),
         order_number: parseInt(node.name.replace(/\D/g, '')) || node.name,
-        email: node.email,
+        email: null,
         currency: node.currencyCode,
         total_price: node.totalPriceSet.shopMoney.amount,
         billing_address: ba ? { name: `${ba.firstName || ''} ${ba.lastName || ''}`.trim(), address1: ba.address1, city: ba.city, country: ba.country } : null,
