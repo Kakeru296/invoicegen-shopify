@@ -1,0 +1,9 @@
+{
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "/api/server" },
+    { "source": "/auth/(.*)", "destination": "/api/server" }
+  ],
+  "functions": {
+    "api/server.js": { "maxDuration": 30 }
+  }
+}
