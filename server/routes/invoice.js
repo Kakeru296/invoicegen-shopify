@@ -32,8 +32,10 @@ function buildPdfArgs({ orderNumber, createdAt, dueDate, email, billingAddress, 
 // POST /api/invoice/from-order — fetch Shopify order and generate invoice
 router.post('/from-order', async (req, res) => {
   try {
-    const { shop, order_id, company_name, company_address, tax_rate } = req.body;
-    const access_token = req.headers['x-shopify-access-token'] || req.body.access_token;
+    const { order_id, company_name, company_address, tax_rate } = req.body;
+    const session = req.shopifySession;
+    const shop = req.body.shop || session?.shop;
+    const access_token = session?.access_token || req.headers['x-shopify-access-token'] || req.body.access_token;
 
     if (!shop || !order_id) return res.status(400).json({ error: 'shop and order_id required' });
 

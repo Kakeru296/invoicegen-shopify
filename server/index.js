@@ -122,7 +122,12 @@ app.get('/api/orders', async (req, res) => {
 });
 
 app.get('/health', (_req, res) => res.json({ ok: true, app: 'invoicegen-shopify' }));
-app.use('/api/invoice', invoiceRouter);
+
+// Attach parsed session to every /api/invoice request so the router can read access_token
+app.use('/api/invoice', (req, _res, next) => {
+  req.shopifySession = getSession(req);
+  next();
+}, invoiceRouter);
 
 app.use((err, _req, res, _next) => {
   console.error(err);
