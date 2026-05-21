@@ -1,4 +1,10 @@
 {
+  "headers": [
+    {
+      "source": "/ss(.*)",
+      "headers": [{ "key": "Access-Control-Allow-Origin", "value": "*" }]
+    }
+  ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/server" },
     { "source": "/auth", "destination": "/api/server" },
